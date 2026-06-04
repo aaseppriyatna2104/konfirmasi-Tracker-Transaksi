@@ -77,7 +77,7 @@ const INC_CATS = [
 ];
 const PAY_METHODS = ['Tunai','E-Toll','Transfer Bank','GoPay','OVO','Dana'];
 const MESIN_TIPE  = ['Ldx Large','Ldx Medium','Ldx Small','Rangka (Nas Med 2 Unit)','Nas Large','Nas Medium','Nas Small'];
-const GS_OPEX = 'https://script.google.com/macros/s/AKfycbwYesb-l0GFAkyrgTwCqwZNVBLONyhUAcYWWzCHb5aQmVO8bQqNIU8R134ybXngUZGx/exec';
+const GS_OPEX = 'https://script.google.com/macros/s/AKfycbwXbOlO-AULsjvkz1cRB-Vbv_7_YjN1I1GYbFE5rGnXes9vFztD7ybM5TuTPxmIOSgA/exec';
 const GS_WA   = 'https://script.google.com/macros/s/AKfycby7lYkxED6m0niTpZIDz5TEH0TlxOWHWW4PIktPSEmx-mwO_iAgwaoYX92o93Wdw4GL/exec';
 const TIPES = [
   {v:'pemasangan',           e:'🔧',   l:'Pemasangan',     s:'Install mesin baru'},
@@ -105,65 +105,17 @@ const DB = {
   rm:(k)=>localStorage.removeItem(k),
 };
 
-/* ── GOOGLE SHEETS HELPERS ──
-   POST  → form-encoded via hidden iframe (no-cors workaround, fire-and-forget)
-   GET   → JSONP callback (bypasses CORS on Apps Script doGet)
-   Never throws, never blocks render.
-─────────────────────────────────────── */
-const gsPost = (url, body) => {
-  try {
-    // Build a hidden form and submit into a throwaway iframe
-    const iframeId = `_gsf_${Date.now()}`;
-    const iframe = document.createElement('iframe');
-    iframe.name = iframeId;
-    iframe.style.cssText = 'display:none;width:0;height:0;border:none;position:absolute;left:-9999px';
-    document.body.appendChild(iframe);
-
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = url;
-    form.target = iframeId;
-    form.style.display = 'none';
-
-    // Apps Script reads e.parameter.payload
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'payload';
-    input.value = JSON.stringify(body);
-    form.appendChild(input);
-
-    document.body.appendChild(form);
-    form.submit();
-
-    // Cleanup after 8s
-    setTimeout(() => {
-      try { document.body.removeChild(form); } catch {}
-      try { document.body.removeChild(iframe); } catch {}
-    }, 8000);
-  } catch(e) { console.warn('gsPost failed:', e); }
+/* Safe Google Sheets fetch — never throws, never blocks render */
+const gsPost = async (url, body) => {
+  try { await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); } catch{}
 };
-
-const gsGet = (url) => new Promise(resolve => {
-  // JSONP: Apps Script doGet must support ?callback=xxx
-  const cbName = `_gsCb_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-  const timer = setTimeout(() => {
-    try { delete window[cbName]; } catch {}
-    try { document.head.removeChild(script); } catch {}
-    resolve([]);
-  }, 6000);
-
-  window[cbName] = (data) => {
-    clearTimeout(timer);
-    try { delete window[cbName]; } catch {}
-    try { document.head.removeChild(script); } catch {}
-    resolve(Array.isArray(data) ? data : []);
-  };
-
-  const script = document.createElement('script');
-  script.src = `${url}?callback=${cbName}&t=${Date.now()}`;
-  script.onerror = () => { clearTimeout(timer); resolve([]); };
-  document.head.appendChild(script);
-});
+const gsGet = async (url) => {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+    return Array.isArray(d) ? d : [];
+  } catch { return []; }
+};
 
 /* ── SHARED UI ── */
 const Toast = ({toasts,remove}) => (
@@ -266,8 +218,6 @@ const Sidebar = ({view,setView,user,logout,open,setOpen}) => {
     {id:'upload',      icon:'📎',label:'Upload Transaksi'},
     {id:'txnlist',     icon:'📋',label:'Daftar Transaksi'},
     ...(user.role==='admin'?[{id:'income',icon:'💵',label:'Input Pemasukan'}]:[]),
-    {sec:'Stok Powerbank'},
-    {id:'stock',       icon:'🔋',label:'Stock Dashboard'},
     {sec:'Operasional'},
     {id:'wa',          icon:'💬',label:'Konfirmasi WA Mesin'},
   ];
@@ -421,7 +371,7 @@ const Upload = ({cats,user,onSave,toast}) => {
     if(!form.amount||isNaN(+form.amount))return toast('Nominal harus angka','error');
     if(!form.category)return toast('Pilih kategori','error');
     const t={id:uid(),transaction_date:form.transaction_date,merchant_name:form.merchant_name.trim(),amount:+form.amount,category:form.category,payment_method:form.payment_method,notes:form.notes,receipt_image_url:files[idx]?.preview||null,status:'pending',created_by:user.id,created_at:new Date().toISOString()};
-    onSave(t);
+    onSave(t); gsPost(GS_OPEX,{...t,type:'expense'});
     toast('✅ Transaksi disimpan!','success');
     setFiles([]); setForm({transaction_date:today(),merchant_name:'',amount:'',category:'',payment_method:'',notes:''});
   };
@@ -621,7 +571,7 @@ const Income = ({onSave,toast}) => {
     if(!form.description.trim())return toast('Deskripsi wajib diisi','error');
     if(!form.amount||isNaN(+form.amount))return toast('Nominal harus angka','error');
     const t={id:uid(),income_date:form.income_date,description:form.description.trim(),amount:+form.amount,category:form.category,notes:form.notes,type:'income',status:'approved',created_at:new Date().toISOString()};
-    onSave(t);
+    onSave(t); gsPost(GS_OPEX,t);
     toast('✅ Pemasukan disimpan!','success');
     setForm({income_date:today(),description:'',amount:'',category:'i1',notes:''});
   };
@@ -691,259 +641,6 @@ Tim Kami sedang Menuju Ke lokasi
 
 Terima kasih 🙏
 Tim Operasional ReCharge`;
-};
-
-/* ── STOCK DASHBOARD ── */
-const StockDashboard = () => {
-  const BLN=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
-  const initState=()=>DB.get('rc_stock_state',{stok:0,masukHari:0,masukBulan:0,keluarHari:0,keluarBulan:0});
-  const initRiwayat=()=>DB.get('rc_stock_riwayat',[]);
-  const initHD=()=>DB.get('rc_stock_hd',{labels:['Sen','Sel','Rab','Kam','Jum','Sab','Min'],masuk:Array(7).fill(0),keluar:Array(7).fill(0)});
-  const initMD=()=>DB.get('rc_stock_md',{labels:['Mg 1','Mg 2','Mg 3','Mg 4'],masuk:Array(4).fill(0),keluar:Array(4).fill(0)});
-  const initBD=()=>DB.get('rc_stock_bd',{labels:BLN.slice(),masuk:Array(12).fill(0),keluar:Array(12).fill(0)});
-
-  const [st,setSt]=useState(initState);
-  const [riwayat,setRiwayat]=useState(initRiwayat);
-  const [hD,setHD]=useState(initHD);
-  const [mD,setMD]=useState(initMD);
-  const [bD,setBD]=useState(initBD);
-  const [view,setView]=useState('hari');
-  const [modal,setModal]=useState(null); // 'masuk' | 'keluar' | null
-  const [fMasuk,setFMasuk]=useState({tgl:today(),jml:1});
-  const [fKeluar,setFKeluar]=useState({tgl:today(),jml:1});
-  const [scan,setScan]=useState({img:null,loading:false,err:'',machineId:null,occ:null,emp:null,tot:null});
-  const fileRef=useRef();
-  const todayStr=today();
-
-  const save=(k,v)=>DB.set(k,v);
-
-  const simpan=(tipe)=>{
-    const jml=Math.max(1,parseInt(tipe==='masuk'?fMasuk.jml:fKeluar.jml)||1);
-    const tv=tipe==='masuk'?fMasuk.tgl:fKeluar.tgl;
-    const tf=tv.split('-').reverse().join('/').slice(0,8);
-    const td=new Date(tv);
-    const ti=td.getDay()===0?6:td.getDay()-1;
-    const wi=Math.min(3,Math.floor((td.getDate()-1)/7));
-    const mi=td.getMonth();
-    const isToday=tv===todayStr;
-    const isMonth=td.getMonth()===new Date().getMonth()&&td.getFullYear()===new Date().getFullYear();
-    const newSt={...st};
-    const newHD={...hD,masuk:[...hD.masuk],keluar:[...hD.keluar]};
-    const newMD={...mD,masuk:[...mD.masuk],keluar:[...mD.keluar]};
-    const newBD={...bD,masuk:[...bD.masuk],keluar:[...bD.keluar]};
-    if(tipe==='masuk'){
-      newSt.stok+=jml;
-      if(isToday)newSt.masukHari+=jml;
-      if(isMonth)newSt.masukBulan+=jml;
-      newHD.masuk[ti]+=jml;newMD.masuk[wi]+=jml;newBD.masuk[mi]+=jml;
-    }else{
-      newSt.stok=Math.max(0,newSt.stok-jml);
-      if(isToday)newSt.keluarHari+=jml;
-      if(isMonth)newSt.keluarBulan+=jml;
-      newHD.keluar[ti]+=jml;newMD.keluar[wi]+=jml;newBD.keluar[mi]+=jml;
-    }
-    const newRiwayat=[{tipe,tgl:tf,jml,machineId:tipe==='keluar'?scan.machineId:null},...riwayat];
-    setSt(newSt);setHD(newHD);setMD(newMD);setBD(newBD);setRiwayat(newRiwayat);
-    save('rc_stock_state',newSt);save('rc_stock_hd',newHD);save('rc_stock_md',newMD);save('rc_stock_bd',newBD);save('rc_stock_riwayat',newRiwayat);
-    setModal(null);setScan({img:null,loading:false,err:'',machineId:null,occ:null,emp:null,tot:null});
-    setFMasuk({tgl:todayStr,jml:1});setFKeluar({tgl:todayStr,jml:1});
-  };
-
-  const handlePhoto=async(e)=>{
-    const file=e.target.files[0];if(!file)return;
-    const reader=new FileReader();
-    reader.onload=async ev=>{
-      const b64=ev.target.result.split(',')[1];
-      const mt=file.type||'image/jpeg';
-      setScan(s=>({...s,img:ev.target.result,loading:true,err:'',machineId:null,occ:null,emp:null,tot:null}));
-      try{
-        const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-          model:'claude-sonnet-4-20250514',max_tokens:500,
-          messages:[{role:'user',content:[
-            {type:'image',source:{type:'base64',media_type:mt,data:b64}},
-            {type:'text',text:`Analisa foto layar mesin powerbank rental. Ekstrak:\n1. Machine ID (teks \"Machine ID\", \"nas_\", atau kode mesin di bagian atas)\n2. Jumlah slot TERISI (ada PB ID — bukan \"empty\")\n3. Jumlah slot KOSONG (\"empty\")\n4. Total slot\nBalas HANYA JSON: {\"machineId\":\"xxx\",\"occupied\":0,\"empty\":0,\"total\":0}\nJika Machine ID tidak ada isi \"unknown\". Pastikan occupied+empty=total.`}
-          ]}]
-        })});
-        const data=await res.json();
-        const txt=(data.content||[]).map(c=>c.text||'').join('');
-        let parsed;
-        try{parsed=JSON.parse(txt.replace(/```json|```/g,'').trim())}catch{throw new Error('Gagal baca hasil AI. Coba foto lebih jelas.')}
-        const{machineId,occupied,empty,total}=parsed;
-        setScan(s=>({...s,loading:false,machineId:(machineId&&machineId!=='unknown')?machineId:null,occ:occupied,emp:empty,tot:total}));
-        setFKeluar(f=>({...f,jml:Math.max(1,occupied)}));
-      }catch(err){setScan(s=>({...s,loading:false,err:err.message||'Terjadi kesalahan.'}));}
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const chartData=view==='hari'?hD:view==='minggu'?mD:bD;
-  const maxBar=Math.max(...chartData.masuk,...chartData.keluar,1);
-  const hasBar=chartData.masuk.some(v=>v>0)||chartData.keluar.some(v=>v>0);
-
-  return (
-    <div className="space-y-5 fade-up max-w-2xl">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="text-2xl font-extrabold text-slate-100">Stock Powerbank</h1><p className="text-sm text-slate-500 mt-0.5">Monitor stok dan transaksi powerbank</p></div>
-        <div className="flex gap-2">
-          <button onClick={()=>setModal('masuk')} className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all" style={{background:'rgba(61,220,132,.08)',border:'1px solid rgba(61,220,132,.2)',color:'#3ddc84'}}>↓ PB Masuk</button>
-          <button onClick={()=>setModal('keluar')} className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all" style={{background:'rgba(96,165,250,.08)',border:'1px solid rgba(96,165,250,.2)',color:'#60a5fa'}}>↑ PB Keluar <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{background:'rgba(96,165,250,.15)'}}>AI</span></button>
-        </div>
-      </div>
-
-      {/* Stat Cards */}
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          {label:'Unit Tersedia',val:st.stok,color:'#3ddc84',sub:null},
-          {label:'PB Masuk',val:st.masukHari,color:'#3ddc84',sub:[{l:'Hari ini',v:st.masukHari},{l:'Bulan ini',v:st.masukBulan}]},
-          {label:'PB Keluar',val:st.keluarHari,color:'#60a5fa',sub:[{l:'Hari ini',v:st.keluarHari},{l:'Bulan ini',v:st.keluarBulan}]},
-        ].map(({label,val,color,sub})=>(
-          <div key={label} className="rounded-2xl p-4 relative overflow-hidden" style={{background:'rgba(15,23,42,.8)',border:'1px solid rgba(30,41,59,.7)'}}>
-            <div className="absolute top-0 left-0 right-0 h-0.5 rounded-t-2xl" style={{background:color}}/>
-            <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-wider leading-tight">{label}</p>
-            <p className="text-3xl font-extrabold font-mono" style={{color,letterSpacing:'-2px'}}>{val}</p>
-            {sub&&<div className="flex gap-2 mt-3 pt-3" style={{borderTop:'1px solid rgba(30,41,59,.8)'}}>
-              {sub.map(({l,v})=><div key={l} className="flex-1"><p className="text-[9px] text-slate-600 mb-0.5">{l}</p><p className="text-xs font-bold font-mono" style={{color}}>{v}</p></div>)}
-            </div>}
-          </div>
-        ))}
-      </div>
-
-      {/* Chart */}
-      <div className="rounded-2xl p-5" style={{background:'rgba(15,23,42,.8)',border:'1px solid rgba(30,41,59,.7)'}}>
-        <div className="flex items-center justify-between mb-4">
-          <p className="text-sm font-bold text-slate-300 flex items-center gap-2">📊 Masuk vs Keluar</p>
-          <div className="flex gap-1">
-            {[['hari','Hari'],['minggu','Minggu'],['bulan','Bulan']].map(([v,l])=>(
-              <button key={v} onClick={()=>setView(v)} className={`text-[10px] px-2.5 py-1 rounded-full font-bold transition-all ${view===v?'text-slate-900':'text-slate-500 hover:text-slate-300'}`}
-                style={{background:view===v?'#3ddc84':'transparent',border:'1px solid '+(view===v?'#3ddc84':'rgba(30,41,59,.8)')}}>
-                {l}
-              </button>
-            ))}
-          </div>
-        </div>
-        {!hasBar
-          ?<div className="h-24 flex flex-col items-center justify-center text-slate-700 gap-1"><span className="text-2xl">📊</span><span className="text-xs">Belum ada data</span></div>
-          :<div className="overflow-x-auto pb-2">
-            <div className="flex items-end gap-2 h-24 min-w-full">
-              {chartData.labels.map((l,i)=>(
-                <div key={l} className="flex-1 flex flex-col items-center gap-1 min-w-[28px]">
-                  <div className="flex items-end gap-0.5 justify-center w-full">
-                    <div className="w-2.5 rounded-t transition-all" style={{height:Math.max(2,Math.round(chartData.masuk[i]/maxBar*80))+'px',background:'#3ddc84',opacity:.9}}/>
-                    <div className="w-2.5 rounded-t transition-all" style={{height:Math.max(2,Math.round(chartData.keluar[i]/maxBar*80))+'px',background:'#60a5fa',opacity:.9}}/>
-                  </div>
-                  <span className="text-[9px] text-slate-600 font-mono whitespace-nowrap">{l}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        }
-        <div className="flex items-center justify-center gap-5 mt-3 pt-3" style={{borderTop:'1px solid rgba(30,41,59,.7)'}}>
-          <div className="flex items-center gap-2 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm" style={{background:'#3ddc84'}}/>Masuk</div>
-          <div className="flex items-center gap-2 text-xs text-slate-500"><span className="w-2.5 h-2.5 rounded-sm" style={{background:'#60a5fa'}}/>Keluar</div>
-        </div>
-      </div>
-
-      {/* Riwayat */}
-      <div className="rounded-2xl overflow-hidden" style={{background:'rgba(15,23,42,.8)',border:'1px solid rgba(30,41,59,.7)'}}>
-        <div className="flex items-center gap-2 px-5 py-4" style={{borderBottom:'1px solid rgba(30,41,59,.7)'}}>
-          <span className="text-sm">⏱</span><p className="text-sm font-bold text-slate-300">Riwayat Transaksi</p>
-        </div>
-        {riwayat.length===0
-          ?<div className="py-12 text-center"><div className="text-3xl mb-2">📦</div><p className="text-sm text-slate-600">Belum ada transaksi</p></div>
-          :riwayat.map((r,i)=>(
-            <div key={i} className="flex items-center gap-4 px-5 py-3.5 row-hover transition-colors" style={{borderBottom:'1px solid rgba(30,41,59,.4)'}}>
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base" style={{background:r.tipe==='masuk'?'rgba(61,220,132,.08)':'rgba(96,165,250,.08)'}}>
-                {r.tipe==='masuk'?'↓':'↑'}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-200">PB {r.tipe==='masuk'?'Masuk':'Keluar'}</p>
-                <p className="text-xs text-slate-600 mt-0.5 flex items-center gap-2">
-                  {r.tgl}
-                  {r.machineId&&<span className="px-1.5 py-0.5 rounded font-mono text-[10px]" style={{background:'rgba(30,41,59,.8)',border:'1px solid rgba(30,41,59,.8)',color:'#94a3b8'}}>{r.machineId}</span>}
-                </p>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-sm font-bold font-mono" style={{color:r.tipe==='masuk'?'#3ddc84':'#60a5fa'}}>{r.tipe==='masuk'?'+':'-'}{r.jml}</p>
-                <p className="text-[10px] text-slate-600">unit</p>
-              </div>
-            </div>
-          ))
-        }
-      </div>
-
-      {/* Modal Masuk */}
-      {modal==='masuk'&&(
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end justify-center fade-in" onClick={()=>setModal(null)}>
-          <div className="w-full max-w-lg rounded-t-2xl p-5 pb-10 fade-up" onClick={e=>e.stopPropagation()} style={{background:'rgba(15,23,42,.99)',border:'1px solid rgba(30,41,59,.9)',borderBottom:'none'}}>
-            <div className="w-8 h-1 bg-slate-700 rounded-full mx-auto mb-5"/>
-            <div className="flex items-center gap-2 mb-5"><span className="text-lg" style={{color:'#3ddc84'}}>↓</span><h3 className="font-extrabold text-slate-100">Tambah PB Masuk</h3></div>
-            <div className="space-y-4">
-              <Fi label="Tanggal" type="date" value={fMasuk.tgl} onChange={e=>setFMasuk(f=>({...f,tgl:e.target.value}))}/>
-              <Fi label="Jumlah Unit" type="number" value={fMasuk.jml} min="1" onChange={e=>setFMasuk(f=>({...f,jml:e.target.value}))}/>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mt-5">
-              <button onClick={()=>setModal(null)} className="py-3 rounded-xl font-bold text-sm text-slate-500 transition-colors" style={{background:'rgba(30,41,59,.6)',border:'1px solid rgba(30,41,59,.8)'}}>Batal</button>
-              <button onClick={()=>simpan('masuk')} className="py-3 rounded-xl font-bold text-sm text-slate-900" style={{background:'#3ddc84'}}>Simpan</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Keluar */}
-      {modal==='keluar'&&(
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end justify-center fade-in" onClick={()=>setModal(null)}>
-          <div className="w-full max-w-lg rounded-t-2xl p-5 pb-10 overflow-y-auto max-h-[90vh] fade-up" onClick={e=>e.stopPropagation()} style={{background:'rgba(15,23,42,.99)',border:'1px solid rgba(30,41,59,.9)',borderBottom:'none'}}>
-            <div className="w-8 h-1 bg-slate-700 rounded-full mx-auto mb-5"/>
-            <div className="flex items-center gap-2 mb-5"><span className="text-lg" style={{color:'#60a5fa'}}>↑</span><h3 className="font-extrabold text-slate-100">Catat PB Keluar</h3></div>
-            <Fi label="Tanggal" type="date" value={fKeluar.tgl} onChange={e=>setFKeluar(f=>({...f,tgl:e.target.value}))} cls="mb-4"/>
-
-            {/* AI Scan Zone */}
-            <div className="mb-4 p-3 rounded-xl text-xs text-slate-400 leading-relaxed" style={{background:'rgba(96,165,250,.05)',border:'1px solid rgba(96,165,250,.1)',borderLeft:'2px solid #60a5fa'}}>
-              📸 Upload foto layar mesin — AI akan baca <strong className="text-slate-300">Machine ID</strong> dan hitung PB di slot secara otomatis.
-            </div>
-
-            {!scan.img
-              ?<div onClick={()=>fileRef.current?.click()} className="mb-4 rounded-xl py-8 flex flex-col items-center gap-2 cursor-pointer transition-all" style={{border:'1.5px dashed rgba(96,165,250,.25)',background:'rgba(96,165,250,.03)'}}>
-                <span className="text-2xl">📷</span>
-                <p className="text-xs text-slate-500">Tap untuk foto layar mesin</p>
-                <p className="text-[10px] text-slate-600">Pastikan Slot Status terlihat</p>
-                <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhoto}/>
-              </div>
-              :<>
-                <img src={scan.img} className="w-full max-h-36 object-contain rounded-xl mb-3" style={{border:'1px solid rgba(30,41,59,.8)'}}/>
-                <button onClick={()=>{setScan({img:null,loading:false,err:'',machineId:null,occ:null,emp:null,tot:null});setFKeluar(f=>({...f,jml:1}));}} className="w-full py-2 rounded-xl text-xs font-semibold text-slate-500 mb-3 flex items-center justify-center gap-1.5 transition-colors hover:text-slate-300" style={{border:'1px dashed rgba(30,41,59,.8)'}}>⟳ Foto ulang</button>
-              </>
-            }
-
-            {scan.loading&&<div className="flex items-center gap-3 mb-4 p-3 rounded-xl text-xs text-slate-400" style={{background:'rgba(30,41,59,.5)'}}><Spin sz="sm"/><span>Sedang membaca dengan AI…</span></div>}
-            {scan.err&&<div className="mb-4 p-3 rounded-xl text-xs flex items-start gap-2" style={{background:'rgba(248,113,113,.06)',border:'1px solid rgba(248,113,113,.15)',color:'#f87171'}}><span className="flex-shrink-0 mt-0.5">⚠</span>{scan.err}</div>}
-            {scan.machineId&&<div className="mb-4 p-3 rounded-xl flex items-center gap-2 text-xs" style={{background:'rgba(96,165,250,.06)',border:'1px solid rgba(96,165,250,.15)',color:'#60a5fa'}}><span>🖥</span><span className="font-mono font-bold">{scan.machineId}</span></div>}
-            {scan.occ!==null&&<div className="mb-4 rounded-xl p-3" style={{background:'rgba(30,41,59,.5)',border:'1px solid rgba(30,41,59,.8)'}}>
-              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-3">Hasil Scan Slot</p>
-              <div className="grid grid-cols-3 gap-2">
-                {[{l:'Terisi',v:scan.occ,c:'#3ddc84'},{l:'Kosong',v:scan.emp,c:'#e2e8f0'},{l:'Total',v:scan.tot,c:'#e2e8f0'}].map(({l,v,c})=>(
-                  <div key={l} className="rounded-lg p-2.5 text-center" style={{background:'rgba(7,11,20,.6)'}}>
-                    <p className="text-xl font-extrabold font-mono" style={{color:c}}>{v}</p>
-                    <p className="text-[9px] text-slate-600 mt-0.5">{l}</p>
-                  </div>
-                ))}
-              </div>
-            </div>}
-
-            <div className="flex items-center gap-2 my-4 text-[10px] text-slate-600 font-bold tracking-wider uppercase"><div className="flex-1 h-px" style={{background:'rgba(30,41,59,.8)'}}/>atau isi manual<div className="flex-1 h-px" style={{background:'rgba(30,41,59,.8)'}}/></div>
-
-            <Fi label="Jumlah Unit Keluar" type="number" value={fKeluar.jml} min="1" onChange={e=>setFKeluar(f=>({...f,jml:e.target.value}))} cls="mb-4"/>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={()=>setModal(null)} className="py-3 rounded-xl font-bold text-sm text-slate-500" style={{background:'rgba(30,41,59,.6)',border:'1px solid rgba(30,41,59,.8)'}}>Batal</button>
-              <button onClick={()=>simpan('keluar')} className="py-3 rounded-xl font-bold text-sm text-slate-900" style={{background:'#60a5fa'}}>Simpan</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 };
 
 const WA = ({toast}) => {
@@ -1063,7 +760,6 @@ const App = () => {
   const [cats,setCats]=useState(()=>DB.get('rc_cats',DEF_CATS));
   const [toasts,setToasts]=useState([]);
   const [sideOpen,setSideOpen]=useState(false);
-  const [syncing,setSyncing]=useState(false);
 
   useEffect(()=>{
     // Init local DB
@@ -1107,26 +803,12 @@ const App = () => {
   const login=u=>{ DB.set('rc_sess',u); setUser(u); };
   const logout=()=>{ DB.rm('rc_sess'); setUser(null); setView('dashboard'); };
 
-  const saveTxn=t=>{
-    const u=[t,...txns];setTxns(u);DB.set('rc_txns',u);
-    setSyncing(true); gsPost(GS_OPEX,{...t,type:'expense'});
-    setTimeout(()=>setSyncing(false),3500);
-    setView('txnlist');
-  };
-  const saveInc=t=>{
-    const u=[t,...incomes];setIncomes(u);DB.set('rc_inc',u);
-    setSyncing(true); gsPost(GS_OPEX,{...t,type:'income'});
-    setTimeout(()=>setSyncing(false),3500);
-    setView('dashboard');
-  };
-  const updTxn=(id,patch)=>{
+  const saveTxn=t=>{const u=[t,...txns];setTxns(u);DB.set('rc_txns',u);setView('txnlist');};
+  const saveInc=t=>{const u=[t,...incomes];setIncomes(u);DB.set('rc_inc',u);setView('dashboard');};
+  const updTxn=async(id,patch)=>{
     const u=txns.map(t=>t.id===id?{...t,...patch}:t);
     setTxns(u);DB.set('rc_txns',u);
-    if(patch.status){
-      setSyncing(true);
-      gsPost(GS_OPEX,{action:'update_status',id,status:patch.status});
-      setTimeout(()=>setSyncing(false),3500);
-    }
+    if(patch.status)gsPost(GS_OPEX,{action:'update_status',id,status:patch.status});
   };
 
   if(!user) return <><Toast toasts={toasts} remove={removeToast}/><Login onLogin={login}/></>;
@@ -1137,7 +819,6 @@ const App = () => {
     txnlist:   <TxnList txns={txns} cats={cats} user={user} onUpdate={updTxn} toast={addToast}/>,
     income:    user.role==='admin'?<Income onSave={saveInc} toast={addToast}/>:null,
     wa:        <WA toast={addToast}/>,
-    stock:     <StockDashboard/>,
   };
 
   return (
@@ -1155,8 +836,7 @@ const App = () => {
               {new Date().toLocaleDateString('id-ID',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
             </div>
             <div className="flex-1"/>
-            {syncing&&<span className="hidden sm:flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 px-2 py-1 rounded-full" style={{background:'rgba(34,197,94,.08)',border:'1px solid rgba(34,197,94,.2)'}}><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 blink"/>Syncing GSheet...</span>}
-            {!syncing&&user.role==='admin'&&<span className="hidden sm:inline text-[10px] font-extrabold text-amber-400/80 px-2 py-0.5 rounded-full uppercase tracking-widest" style={{background:'rgba(245,158,11,.08)',border:'1px solid rgba(245,158,11,.18)'}}>Admin</span>}
+            {user.role==='admin'&&<span className="hidden sm:inline text-[10px] font-extrabold text-amber-400/80 px-2 py-0.5 rounded-full uppercase tracking-widest" style={{background:'rgba(245,158,11,.08)',border:'1px solid rgba(245,158,11,.18)'}}>Admin</span>}
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-sky-400" style={{background:'rgba(14,165,233,.1)',border:'1px solid rgba(14,165,233,.2)'}}>{user.initials}</div>
               <span className="text-xs text-slate-500 hidden sm:block font-semibold">{user.name}</span>
